@@ -1,0 +1,61 @@
+{
+  "nodeCam_cyclePreset": {
+    "order": 2017,
+    "title": "nodeCam: next anchor preset",
+    "desc": "Jump the anchor between dash, hood, bumper, roof, tail and wheel arches",
+    "cat": "camera",
+    "onDown": "if nodeCamCore then nodeCamCore.cyclePreset(1) elseif obj and obj.queueGameEngineLua then obj:queueGameEngineLua([[if nodeCamCore then nodeCamCore.cyclePreset(1) end]]) end",
+    "ctx": "ge"
+  },
+  "nodeCam_toggleDebug": {
+    "order": 2019,
+    "title": "nodeCam: toggle beam debug",
+    "desc": "Draw the virtual beams from the camera to the nodes it is welded to",
+    "cat": "camera",
+    "onDown": "if nodeCamCore then nodeCamCore.toggleDebug() elseif obj and obj.queueGameEngineLua then obj:queueGameEngineLua([[if nodeCamCore then nodeCamCore.toggleDebug() end]]) end",
+    "ctx": "ge"
+  },
+  "nodeCam_resetLook": {
+    "order": 2020,
+    "title": "nodeCam: recentre view",
+    "desc": "Snap the look direction back to straight ahead",
+    "cat": "camera",
+    "onDown": "if nodeCamCore then nodeCamCore.resetLook() elseif obj and obj.queueGameEngineLua then obj:queueGameEngineLua([[if nodeCamCore then nodeCamCore.resetLook() end]]) end",
+    "ctx": "ge"
+  },
+  "nodeCam_toggleLock": {
+    "order": 2021,
+    "cat": "camera",
+    "title": "nodeCam: lock node set",
+    "desc": "Freeze the attached nodes so moving the camera keeps them",
+    "onDown": "if nodeCamCore then nodeCamCore.toggleLock() elseif obj and obj.queueGameEngineLua then obj:queueGameEngineLua([[if nodeCamCore then nodeCamCore.toggleLock() end]]) end"
+  },
+  "nodeCam_toggleNode": {
+    "order": 2022,
+    "cat": "camera",
+    "title": "nodeCam: toggle node under crosshair",
+    "desc": "Add or remove the node you are aiming at, needs beam debug on",
+    "onDown": "if nodeCamCore then nodeCamCore.toggleNode() elseif obj and obj.queueGameEngineLua then obj:queueGameEngineLua([[if nodeCamCore then nodeCamCore.toggleNode() end]]) end"
+  },
+  "nodeCam_toggleBypass": {
+    "order": 2023,
+    "cat": "camera",
+    "title": "nodeCam: ignore nodes (steady view)",
+    "desc": "Hold a steady view off the vehicle instead of following nodes. Picker stays on.",
+    "onDown": "if nodeCamCore then nodeCamCore.toggleBypass() elseif obj and obj.queueGameEngineLua then obj:queueGameEngineLua([[if nodeCamCore then nodeCamCore.toggleBypass() end]]) end"
+  },
+  "nodeCam_clearNodes": {
+    "order": 2024,
+    "cat": "camera",
+    "title": "nodeCam: clear all nodes",
+    "desc": "Empty the attached set and lock it, so you can pick your own from scratch",
+    "onDown": "if nodeCamCore then nodeCamCore.clearNodes() elseif obj and obj.queueGameEngineLua then obj:queueGameEngineLua([[if nodeCamCore then nodeCamCore.clearNodes() end]]) end"
+  },
+  "nodeCam_cycleSlot": {
+    "order": 2025,
+    "cat": "camera",
+    "title": "nodeCam: next camera slot",
+    "desc": "Cycle the three saved camera and node sets for this vehicle",
+    "onDown": "if nodeCamCore then nodeCamCore.cycleSlot() elseif obj and obj.queueGameEngineLua then obj:queueGameEngineLua([[if nodeCamCore then nodeCamCore.cycleSlot() end]]) end"
+  }
+}
