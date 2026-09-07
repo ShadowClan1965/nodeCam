@@ -1,0 +1,21 @@
+{
+  "domElement": "<node-cam-controls></node-cam-controls>",
+  "name": "nodeCam Controls",
+  "types": [
+    "ui.apps.categories.utility"
+  ],
+  "description": "Buttons for the nodeCam camera mode, so you do not have to spend keybinds on it",
+  "css": {
+    "min-width": "30px",
+    "min-height": "30px",
+    "width": "170px",
+    "height": "255px",
+    "left": "1%",
+    "top": "30%"
+  },
+  "author": "ShadowClan1965",
+  "version": "3.5",
+  "directive": "nodeCamControls",
+  "category": "Utility",
+  "isAuxiliary": false
+}

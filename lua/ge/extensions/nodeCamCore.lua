@@ -1,10 +1,82 @@
--- nodeCamCore: state and controls for the nodeCam camera mode.
+-- nodeCamCore: settings, saved cameras and console commands for nodeCam.
+-- Holds everything that must survive a vehicle switch or be reachable from the
+-- console and UI. The camera mode is in core/cameraModes/nodeCam.lua.
 
 local M = {}
 
-local function logi(m) log('I', 'nodeCam', m) end
+local SETTINGS_PATH = 'settings/nodeCam.json'
 
--- On-screen notice.
+-- ---------------------------------------------------------------------------
+-- settings
+-- ---------------------------------------------------------------------------
+
+M.defaults = {
+  enabled          = true,  -- false holds a steady view, picking still works
+  quiet            = false, -- suppress info logging, errors always get through
+
+  fov              = 65,
+  moveSpeed        = 1.1,   -- anchor move speed, m/s
+  fastMultiplier   = 3.0,
+  boundsMargin     = 3.0,   -- how far past the vehicle the anchor may go, metres
+  boundsEnabled    = true,  -- false removes the leash entirely
+
+  lookSensitivity  = 0.25,  -- mouse look scaling, raw deltas are far too hot
+  keyLookSpeed     = 1.2,   -- look speed for analog/keyboard look, rad/s
+  invertYaw        = false,
+  invertPitch      = false,
+  invertPadYaw     = false, -- pad/keyboard look is a separate path from the
+  invertPadPitch   = false, -- mouse, so it gets its own two inversion flags
+
+  slotCount        = 3,     -- saved cameras per vehicle, 1-6
+
+  softness         = 0.0,   -- 0 = rigid, above 0 blends in the virtual springs
+  stiffness        = 900.0,
+  damping          = 26.0,
+  maxSag           = 0.25,  -- hard leash on how far soft mode may drift, metres
+
+  outlierResidual  = 0.09,  -- absolute floor for dropping a node, metres
+  outlierMedianScale = 3.0, -- and drop anything this many times the median
+  maxDropFraction  = 0.4,   -- never discard more than this share at once
+
+  picker           = false, -- draw nearby nodes and the crosshair pick
+  pickRadius       = 2.5,   -- live distance from the camera, metres
+  pickRadiusNear   = 0.08,  -- always hittable within this radius, however close
+  pickSpread       = 0.045, -- crosshair tolerance, larger is more forgiving
+  maxDrawnNodes    = 220,   -- cap, a T-series has well over a thousand nodes
+}
+
+M.settings = {}
+for k, v in pairs(M.defaults) do M.settings[k] = v end
+
+local LIMITS = {
+  fov             = { 10, 140 },
+  moveSpeed       = { 0.05, 20 },
+  fastMultiplier  = { 1, 20 },
+  boundsMargin    = { 0, 50 },
+  lookSensitivity = { 0.01, 3.0 },
+  keyLookSpeed    = { 0.05, 10 },
+  slotCount       = { 1, 6 },
+  softness        = { 0, 1 },
+  stiffness       = { 1, 5000 },
+  damping         = { 0, 200 },
+  maxSag          = { 0, 2 },
+  pickRadius      = { 0.3, 8 },
+  pickSpread      = { 0.005, 0.3 },
+  maxDrawnNodes   = { 10, 2000 },
+}
+
+-- ---------------------------------------------------------------------------
+-- logging
+-- ---------------------------------------------------------------------------
+
+-- All info-level output funnels through here so one toggle silences it.
+function M.logi(m)
+  if not M.settings.quiet then log('I', 'nodeCam', m) end
+end
+
+function M.logw(m) log('W', 'nodeCam', m) end
+function M.loge(m) log('E', 'nodeCam', m) end
+
 function M.msg(text, ttl)
   ttl = ttl or 2
   local shown = pcall(function() ui_message(text, ttl, 'nodeCam', 'videocam') end)
@@ -14,105 +86,120 @@ function M.msg(text, ttl)
         { ttl = ttl, msg = text, category = 'nodeCam', icon = 'videocam' })
     end)
   end
-  log('I', 'nodeCam', text)
+  M.logi(text)
   return shown
 end
-local function logw(m) log('W', 'nodeCam', m) end
 
 -- ---------------------------------------------------------------------------
--- settings
+-- persistence
 -- ---------------------------------------------------------------------------
 
-M.settings = {
-  nodeCount        = 10,    -- how many nodes the camera welds itself to
-  softness         = 0.0,   -- 0 = rigid. Above 0 blends in the virtual beams
-  stiffness        = 900.0, -- virtual beam spring rate
-  damping          = 26.0,  -- virtual beam damping
-  maxSag           = 0.25,  -- hard leash on how far soft mode may drift, metres
-  fov              = 65,
-  outlierResidual  = 0.09,  -- absolute floor for dropping a node, metres
-  outlierMedianScale = 3.0, -- and drop anything this many times the median residual
-  maxDropFraction  = 0.4,   -- never discard more than this share of the set at once
-  strainAbsTol     = 0.03,  -- virtual beam length change tolerated, metres
-  strainRelTol     = 0.12,  -- plus this share of the beam's rest length
-  reattachDist     = 0.12,  -- move the anchor this far and we re-pick nodes
-  reattachInterval = 0.15,  -- fastest allowed re-pick rate, seconds
-  minSeparation    = 0.05,  -- refuse nodes closer together than this
-  searchRadius     = 1.2,   -- initial node search radius around the anchor
-  moveSpeed        = 1.1,   -- anchor move speed, m/s
-  fastMultiplier   = 3.0,
-  lookSensitivity  = 0.25,  -- mouse look scaling. Raw deltas are far too hot
-  keyLookSpeed     = 1.2,   -- look speed for analog/keyboard look, rad/s
-  invertYaw        = false, -- flip if looking left and right feels backwards
-  invertPitch      = false, -- flip if looking up and down feels backwards
-  nativeMove       = true,  -- also read the game's own camera movement keys
-  lock             = false, -- freeze the attached node set
-  bypass           = false, -- ignore the nodes, hold a steady view
-  pickRadius       = 2.5,   -- how far around the camera nodes are shown, metres
-  pickRadiusNear   = 0.08,  -- always hittable within this radius, however close
-  maxDrawnNodes    = 220,   -- cap, a T-series has well over a thousand nodes
-  pickSpread       = 0.045, -- crosshair tolerance, larger is more forgiving
-  banStrikes       = 8,     -- failures before a node is struck off for good
-  strikeDecay      = 2.0,   -- failures forgiven per second while a node behaves
-  debug            = false, -- draw the virtual beams
-}
+function M.save()
+  local ok = pcall(function()
+    jsonWriteFile(SETTINGS_PATH, { settings = M.settings }, true)
+  end)
+  if not ok then M.logw('could not write ' .. SETTINGS_PATH) end
+  return ok
+end
 
--- live movement flags, driven by keybinds
-M.move = { fast = false }
-
--- ---------------------------------------------------------------------------
--- internal state
--- ---------------------------------------------------------------------------
-
-local anchors = {}         -- vid -> last anchor position, vehicle local
-local pendingPreset = nil
-local pendingReattach = false
-local pendingLookReset = false
-local pendingClearBans = false
-local pendingLook = nil
-
-local PRESETS = { 'dash', 'hood', 'bumper', 'roof', 'tail', 'wheelLeft', 'wheelRight' }
-local presetIndex = 1
-
--- ---------------------------------------------------------------------------
--- anchor persistence
--- ---------------------------------------------------------------------------
-
-function M.getAnchor(vid) return anchors[vid] end
-
-function M.setAnchor(vid, x, y, z)
-  local a = anchors[vid]
-  if a then
-    a.x, a.y, a.z = x, y, z
-  else
-    anchors[vid] = { x = x, y = y, z = z }
+function M.load()
+  local ok, saved = pcall(function() return jsonReadFile(SETTINGS_PATH) end)
+  if not ok or type(saved) ~= 'table' or type(saved.settings) ~= 'table' then
+    return false
   end
+  -- only keys we know about, so a stale file cannot inject junk
+  for k, v in pairs(saved.settings) do
+    if M.defaults[k] ~= nil and type(v) == type(M.defaults[k]) then
+      M.settings[k] = v
+    end
+  end
+  return true
+end
+
+function M.resetSettings()
+  for k, v in pairs(M.defaults) do M.settings[k] = v end
+  M.save()
+  M.msg('nodeCam: settings reset to defaults')
+end
+
+-- Single setter for the UI, console and keybinds: clamping and persistence
+-- happen in one place.
+function M.set(key, value)
+  local def = M.defaults[key]
+  if def == nil then M.logw('unknown setting: ' .. tostring(key)); return false end
+
+  if type(def) == 'boolean' then
+    if type(value) == 'number' then value = (value ~= 0) end
+    M.settings[key] = (value == true)
+  else
+    local v = tonumber(value)
+    if v == nil then M.logw('setting ' .. key .. ' needs a number'); return false end
+    local lim = LIMITS[key]
+    if lim then
+      if v < lim[1] then v = lim[1] end
+      if v > lim[2] then v = lim[2] end
+    end
+    if key == 'attachCount' or key == 'slotCount' or key == 'maxDrawnNodes' then
+      v = math.floor(v)
+    end
+    M.settings[key] = v
+  end
+
+  M.save()
+  return true
+end
+
+function M.get(key) return M.settings[key] end
+
+function M.toggle(key)
+  if type(M.defaults[key]) ~= 'boolean' then return false end
+  M.set(key, not M.settings[key])
+  M.msg('nodeCam: ' .. key .. ' ' .. (M.settings[key] and 'on' or 'off'))
+  return M.settings[key]
 end
 
 -- ---------------------------------------------------------------------------
--- things the camera mode polls each frame
+-- pending actions
 -- ---------------------------------------------------------------------------
 
-function M.consumePreset()
-  local p = pendingPreset
-  pendingPreset = nil
-  return p
+-- The camera mode only runs inside core_camera's update, so keybind, console
+-- and UI actions are parked here and picked up next frame.
+
+local pending = {}
+
+local function queue(key, value)
+  pending[key] = (value == nil) and true or value
 end
 
-function M.preset(name)
-  pendingPreset = name or 'dash'
-  M.msg('nodeCam: ' .. tostring(pendingPreset))
+function M.consume(key)
+  local v = pending[key]
+  pending[key] = nil
+  return v
 end
 
-function M.cyclePreset(step)
-  presetIndex = presetIndex + (step or 1)
-  while presetIndex > #PRESETS do presetIndex = presetIndex - #PRESETS end
-  while presetIndex < 1 do presetIndex = presetIndex + #PRESETS end
-  M.preset(PRESETS[presetIndex])
+-- ---------------------------------------------------------------------------
+-- actions
+-- ---------------------------------------------------------------------------
+
+function M.togglePicker()
+  M.toggle('picker')
 end
 
--- Move the anchor straight from the console.
-local pendingNudge = nil
+function M.toggleEnabled()
+  M.toggle('enabled')
+end
+
+function M.toggleNode()
+  queue('toggleNode')
+end
+
+function M.clearNodes()
+  queue('clearNodes')
+end
+
+function M.cycleSlot()
+  queue('cycleSlot')
+end
 
 function M.nudge(dir, amount)
   amount = tonumber(amount) or 0.15
@@ -123,98 +210,41 @@ function M.nudge(dir, amount)
   elseif dir == 'right' then n.x = -amount
   elseif dir == 'up' then n.z = amount
   elseif dir == 'down' then n.z = -amount
-  else logw("nudge: use forward, back, left, right, up or down"); return end
-  pendingNudge = n
-  M.hits = M.hits + 1
-  logi(string.format('nudging anchor %s by %.2f m', dir, amount))
+  else M.logw('nudge: use forward, back, left, right, up or down'); return end
+  queue('nudge', n)
+  M.logi(string.format('nudging anchor %s by %.2f m', dir, amount))
 end
 
-function M.consumeNudge()
-  local n = pendingNudge
-  pendingNudge = nil
-  return n
-end
-
--- Turn the view from the console, same idea for the look path.
 function M.look(yawDeg, pitchDeg)
-  pendingLook = { yaw = math.rad(tonumber(yawDeg) or 0),
-                  pitch = math.rad(tonumber(pitchDeg) or 0) }
-  logi(string.format('turning view by %s deg yaw, %s deg pitch',
-    tostring(yawDeg), tostring(pitchDeg)))
+  queue('look', { yaw = math.rad(tonumber(yawDeg) or 0),
+                  pitch = math.rad(tonumber(pitchDeg) or 0) })
 end
 
-function M.consumeLook()
-  local l = pendingLook
-  pendingLook = nil
-  return l
+function M.resetLook()
+  queue('resetLook')
 end
 
-function M.setSoftness(v)
-  v = tonumber(v) or 0
-  M.settings.softness = math.max(0, math.min(1, v))
-  M.msg(string.format('nodeCam: softness %.2f', M.settings.softness))
-end
+-- ---------------------------------------------------------------------------
+-- anchors and camera slots
+-- ---------------------------------------------------------------------------
 
-function M.setNodes(n)
-  n = tonumber(n) or 10
-  M.settings.nodeCount = math.max(4, math.min(32, math.floor(n)))
-  pendingReattach = true
-  M.msg('nodeCam: using ' .. M.settings.nodeCount .. ' nodes')
-end
-
-function M.setFov(f)
-  M.settings.fov = math.max(10, math.min(140, tonumber(f) or 65))
-  M.msg(string.format('nodeCam: fov %d', M.settings.fov))
-end
-
--- BeamNG's zoom filter runs after camera modes and can overwrite fov.
-function M.forceFov(on)
-  on = (on ~= false)
-  local ok = pcall(function() core_camera.setSkipFovModifier(0, on) end)
-  if not ok then ok = pcall(function() core_camera.setSkipFovModifier(on) end) end
-  M.msg('nodeCam: fov override ' .. (ok and 'on' or 'unavailable'))
-  return ok
-end
-
--- If the vehicle frame had to be guessed from the node cloud, front and back
--- are a coin toss.
-local pendingFlip = false
-
-local pendingClear, pendingSlot = false, false
-
-function M.toggleBypass()
-  M.settings.bypass = not M.settings.bypass
-  M.msg('nodeCam: ' .. (M.settings.bypass and 'nodes ignored, steady view'
-    or 'following nodes again'))
-end
-
--- Empties the attached set.
-function M.clearNodes()
-  M.settings.lock = true
-  pendingClear = true
-  M.msg('nodeCam: nodes cleared, locked, pick your own')
-end
-
-function M.consumeClear()
-  local c = pendingClear
-  pendingClear = false
-  return c
-end
-
--- Three independent camera and node sets per vehicle.
+local anchors = {}
 local slots, activeSlot = {}, {}
 
-function M.cycleSlot()
-  pendingSlot = true
+function M.getAnchor(vid) return anchors[vid] end
+
+function M.setAnchor(vid, x, y, z)
+  local a = anchors[vid]
+  if a then a.x, a.y, a.z = x, y, z
+  else anchors[vid] = { x = x, y = y, z = z } end
 end
 
-function M.consumeCycleSlot()
-  local c = pendingSlot
-  pendingSlot = false
-  return c
+function M.slotIndex(vid)
+  local i = activeSlot[vid] or 1
+  if i > M.settings.slotCount then i = 1 end
+  return i
 end
 
-function M.slotIndex(vid) return activeSlot[vid] or 1 end
 function M.setSlotIndex(vid, i) activeSlot[vid] = i end
 
 function M.saveSlot(vid, i, d)
@@ -226,186 +256,87 @@ function M.getSlot(vid, i)
   return slots[vid] and slots[vid][i]
 end
 
-function M.toggleLock()
-  M.settings.lock = not M.settings.lock
-  M.msg(M.settings.lock and 'nodeCam: nodes LOCKED' or 'nodeCam: nodes unlocked')
-end
+-- ---------------------------------------------------------------------------
+-- state published by the camera mode, for diag and the UI
+-- ---------------------------------------------------------------------------
 
-local pendingToggleNode = false
+M.live = false
+M.liveInfo = nil
+M.moveSource = nil
+M.lookSource = nil
+M.lookSeen = nil
 
-function M.toggleNode()
-  pendingToggleNode = true
-end
-
-function M.consumeToggleNode()
-  local r = pendingToggleNode
-  pendingToggleNode = false
-  return r
-end
-
-function M.toggleInvertYaw()
-  M.settings.invertYaw = not M.settings.invertYaw
-  M.msg('nodeCam: yaw ' .. (M.settings.invertYaw and 'inverted' or 'normal'))
-end
-
-function M.setNativeMove(v)
-  M.settings.nativeMove = (v ~= false)
-  logi('reading the game camera movement keys: ' .. tostring(M.settings.nativeMove))
-end
-
-function M.setPickRadius(r)
-  M.settings.pickRadius = math.max(0.3, math.min(8, tonumber(r) or 2.5))
-  logi(string.format('showing nodes within %.2f m', M.settings.pickRadius))
-end
-
-function M.flipForward()
-  pendingFlip = true
-  M.msg('nodeCam: flipped front/back')
-end
-
-function M.consumeFlip()
-  local f = pendingFlip
-  pendingFlip = false
-  return f
-end
-
-function M.clearBans()
-  pendingClearBans = true
-  M.msg('nodeCam: cleared all node choices')
-end
-
-function M.consumeClearBans()
-  local r = pendingClearBans
-  pendingClearBans = false
-  return r
-end
-
-function M.setBanStrikes(n)
-  M.settings.banStrikes = math.max(1, math.min(200, tonumber(n) or 8))
-  logi('nodes struck off after ' .. M.settings.banStrikes .. ' failures')
-end
-
-function M.setLookSensitivity(v)
-  M.settings.lookSensitivity = math.max(0.01, math.min(3.0, tonumber(v) or 0.25))
-  logi(string.format('look sensitivity %.2f', M.settings.lookSensitivity))
-end
-
-function M.toggleInvertPitch()
-  M.settings.invertPitch = not M.settings.invertPitch
-  M.msg('nodeCam: pitch ' .. (M.settings.invertPitch and 'inverted' or 'normal'))
-end
-
-function M.resetLook()
-  pendingLookReset = true
-  M.msg('nodeCam: view recentred')
-end
-
-function M.consumeLookReset()
-  local r = pendingLookReset
-  pendingLookReset = false
-  return r
-end
-
-function M.setMoveSpeed(s)
-  M.settings.moveSpeed = math.max(0.05, math.min(20, tonumber(s) or 1.1))
-  M.msg(string.format('nodeCam: move speed %.2f m/s', M.settings.moveSpeed))
-end
-
-function M.toggleDebug()
-  M.settings.debug = not M.settings.debug
-  M.msg('nodeCam: node picker ' .. (M.settings.debug and 'on' or 'off'))
+-- Everything the UI needs in one call.
+function M.requestUIState()
+  local li = M.liveInfo or {}
+  return {
+    active = M.settings.enabled,
+    running = M.live == true,
+    settings = M.settings,
+    attached = li.nSel or 0,
+    totalNodes = li.nNodes or 0,
+    slot = li.vid and M.slotIndex(li.vid) or 1,
+    slotCount = M.settings.slotCount,
+    steady = (li.nSel or 0) < 4,
+    fallback = li.fallback,
+  }
 end
 
 function M.status()
   local s = M.settings
-  logi(string.format(
-    'nodes=%d softness=%.2f fov=%d moveSpeed=%.2f look=%.2f lock=%s debug=%s',
-    s.nodeCount, s.softness, s.fov, s.moveSpeed, s.lookSensitivity,
-    tostring(s.lock), tostring(s.debug)))
+  M.logi(string.format(
+    'enabled=%s fov=%d moveSpeed=%.2f look=%.2f slots=%d picker=%s',
+    tostring(s.enabled), s.fov, s.moveSpeed, s.lookSensitivity,
+    s.slotCount, tostring(s.picker)))
 end
 
--- ---------------------------------------------------------------------------
--- diagnostics
--- ---------------------------------------------------------------------------
-
--- Dump what the mod can actually see.
 function M.diag()
   local out = {}
-  local function add(fmt, ...) out[#out + 1] = string.format(fmt, ...) end
+  local function add(fmt, ...)
+    local ok, line = pcall(string.format, fmt, ...)
+    out[#out + 1] = ok and line or (fmt .. '  <bad args>')
+  end
 
   add('--- nodeCam diagnostics ---')
-  add('camera mode running : %s', tostring(M.live == true))
-  add('binding hits so far : %d  (press a movement key, then run this again)', M.hits)
+  add('enabled / running   : %s / %s', tostring(M.settings.enabled), tostring(M.live == true))
+  add('move source seen    : %s', tostring(M.moveSource or 'none yet'))
   add('look source seen    : %s', tostring(M.lookSource or 'none yet'))
+  local ls = M.lookSeen
+  if ls then
+    add('  mouse delta path  : %s', tostring(ls.delta or 'nothing yet'))
+    add('  pad/analog path   : %s', tostring(ls.pair or 'nothing yet'))
+  end
+  add('invert y/p, pad y/p : %s/%s, %s/%s',
+    tostring(M.settings.invertYaw), tostring(M.settings.invertPitch),
+    tostring(M.settings.invertPadYaw), tostring(M.settings.invertPadPitch))
 
   local li = M.liveInfo
   if li then
-    add('state               : %s', li.fallback and ('FALLBACK - ' .. tostring(li.fallback))
-      or 'attached and running')
+    add('state               : %s',
+      li.fallback and ('FALLBACK - ' .. tostring(li.fallback))
+      or (((li.nSel or 0) >= 4) and 'attached' or 'steady, no nodes picked'))
     add('node map built      : %s', tostring(li.shapeReady == true))
     if li.shapeFail then add('node map failure    : %s', tostring(li.shapeFail)) end
-    add('refNodes provided   : %s', tostring(li.hasRefNodes))
     add('vehicle frame from  : %s', tostring(li.frameSource or 'not resolved'))
-    add('node set            : %s', li.locked and 'LOCKED' or 'auto')
-    add('nodes drawn / hover : %s / %s', tostring(li.nPick or 0), tostring(li.hover or 'none'))
-    add('movement source     : %s', tostring(M.moveSource or 'none seen'))
-    add('camera slot         : %d of 3', M.slotIndex(li.vid))
-    add('fov / move speed    : %d / %.2f  (asked for, may be overridden)',
-      M.settings.fov, M.settings.moveSpeed)
-    add('bypass              : %s', tostring(M.settings.bypass))
-    if li.inputSeen then
-      add('input fields moving : %s',
-        (#li.inputSeen > 0) and table.concat(li.inputSeen, ', ')
-        or '(none seen yet - move the mouse, then run this again)')
-    end
-    add('vehicle %s, %s nodes total, %s attached',
+    add('vehicle / nodes     : %s / %s total, %s attached',
       tostring(li.vid), tostring(li.nNodes), tostring(li.nSel))
-    add('anchor  %.3f %.3f %.3f', li.anchorX or 0, li.anchorY or 0, li.anchorZ or 0)
-    add('yaw %.3f  pitch %.3f rad', li.yaw or 0, li.pitch or 0)
-    if li.dataKeys then
-      add('camera data fields  : %s', table.concat(li.dataKeys, ', '))
+    add('picker drawn / hover: %s / %s',
+      tostring(li.nPick or 0), tostring(li.hover or 'none'))
+    add('camera slot         : %d of %d',
+      M.slotIndex(li.vid), M.settings.slotCount)
+    add('anchor              : %.3f %.3f %.3f',
+      li.anchorX or 0, li.anchorY or 0, li.anchorZ or 0)
+    add('anchor clamped      : %s', tostring(li.clamped == true))
+    add('yaw / pitch         : %.3f / %.3f rad', li.yaw or 0, li.pitch or 0)
+    if li.inputSeen and #li.inputSeen > 0 then
+      add('input fields moving : %s', table.concat(li.inputSeen, ', '))
     end
   else
     add('camera mode has not run yet, press C until you reach nodeCam')
   end
 
-  -- which methods does the vehicle object actually expose to us
-  local veh
-  pcall(function() veh = be:getPlayerVehicle(0) end)
-  if veh then
-    local probe = { 'getNodeCount', 'getNodePosition', 'getPosition', 'getRotation',
-                    'getRefNodeRotation', 'getDirectionVector', 'getDirectionVectorUp' }
-    local have, missing = {}, {}
-    for _, name in ipairs(probe) do
-      local ok, v = pcall(function() return veh[name] end)
-      if ok and v ~= nil then have[#have + 1] = name else missing[#missing + 1] = name end
-    end
-    add('vehicle has          : %s', table.concat(have, ', '))
-    add('vehicle lacks        : %s', (#missing > 0) and table.concat(missing, ', ') or '(none)')
-    local okc, cnt = pcall(function() return veh:getNodeCount() end)
-    add('getNodeCount()       : %s', okc and tostring(cnt) or 'CALL FAILED')
-  else
-    add('no player vehicle object available')
-  end
-
-  -- what does MoveManager actually offer
-  local mm = MoveManager
-  add('MoveManager type    : %s', type(mm))
-  if type(mm) == 'table' then
-    local names, nonzero = {}, {}
-    for k, v in pairs(mm) do
-      if type(v) == 'number' then
-        names[#names + 1] = k
-        if v ~= 0 then nonzero[#nonzero + 1] = string.format('%s=%.4f', k, v) end
-      end
-    end
-    table.sort(names)
-    add('MoveManager numbers : %s', table.concat(names, ', '))
-    add('currently non-zero  : %s',
-      (#nonzero > 0) and table.concat(nonzero, ', ') or '(none)')
-  end
-
-  for _, line in ipairs(out) do logi(line) end
+  M.status()
+  for _, line in ipairs(out) do log('I', 'nodeCam', line) end
   return table.concat(out, '\n')
 end
 
@@ -413,15 +344,34 @@ end
 -- lifecycle
 -- ---------------------------------------------------------------------------
 
--- Every hook below is wrapped.
+local function forgetVehicle(vid)
+  if not vid then return end
+  anchors[vid] = nil
+  slots[vid] = nil
+  activeSlot[vid] = nil
+end
+
 function M.onVehicleDestroyed(vid)
+  pcall(function() forgetVehicle(vid) end)
+end
+
+-- A replaced vehicle usually keeps its ID, so the saved anchor and camera slots
+-- would otherwise carry over to a body they were never picked on. The camera
+-- mode checks a shape signature too; these hooks just make it immediate.
+function M.onVehicleSpawned(vid)
   pcall(function()
-    if vid then anchors[vid] = nil end
+    forgetVehicle(vid)
+    queue('invalidate')
   end)
 end
 
+function M.onVehicleSwitched(oldId, newId)
+  pcall(function() queue('invalidate') end)
+end
+
 function M.onExtensionLoaded()
-  logi('nodeCamCore 2.1 loaded. Press C to cycle to nodeCam.')
+  M.load()
+  M.logi('nodeCamCore 3.0 loaded. Press C to cycle to nodeCam.')
   return true
 end
 
