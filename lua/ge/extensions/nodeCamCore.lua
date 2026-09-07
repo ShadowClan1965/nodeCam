@@ -230,6 +230,7 @@ end
 
 local anchors = {}
 local slots, activeSlot = {}, {}
+local states = {}
 
 function M.getAnchor(vid) return anchors[vid] end
 
@@ -254,6 +255,17 @@ end
 
 function M.getSlot(vid, i)
   return slots[vid] and slots[vid][i]
+end
+
+-- The live camera for a vehicle, parked when you tab away and handed back when
+-- you tab in again. Keyed by the same shape signature the camera mode uses, so
+-- a replaced body never inherits the old one's nodes.
+function M.saveState(vid, st)
+  if vid and st then states[vid] = st end
+end
+
+function M.getState(vid)
+  return states[vid]
 end
 
 -- ---------------------------------------------------------------------------
@@ -349,15 +361,15 @@ local function forgetVehicle(vid)
   anchors[vid] = nil
   slots[vid] = nil
   activeSlot[vid] = nil
+  states[vid] = nil
 end
 
 function M.onVehicleDestroyed(vid)
   pcall(function() forgetVehicle(vid) end)
 end
 
--- A replaced vehicle usually keeps its ID, so the saved anchor and camera slots
--- would otherwise carry over to a body they were never picked on. The camera
--- mode checks a shape signature too; these hooks just make it immediate.
+-- A replaced vehicle usually keeps its ID, so its saved camera would otherwise
+-- carry over to a body it was never picked on.
 function M.onVehicleSpawned(vid)
   pcall(function()
     forgetVehicle(vid)
@@ -365,9 +377,9 @@ function M.onVehicleSpawned(vid)
   end)
 end
 
-function M.onVehicleSwitched(oldId, newId)
-  pcall(function() queue('invalidate') end)
-end
+-- Deliberately does nothing. Tabbing between vehicles is not a vehicle change:
+-- the camera mode compares a shape signature and restores each vehicle's own
+-- saved camera. Forcing an invalidate here wiped the node set on every tab.
 
 function M.onExtensionLoaded()
   M.load()

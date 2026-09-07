@@ -646,6 +646,38 @@ function C:loadSlot(vid, i)
   return true
 end
 
+-- Park the current camera under the outgoing vehicle so tabbing back returns
+-- you to the nodes you picked on it.
+function C:stashState()
+  if not (nodeCamCore and nodeCamCore.saveState) then return end
+  if not (self.shapeVid and self.shapeSig and self.shapeReady) then return end
+  local nodes = {}
+  for i = 1, self.nSel do nodes[i] = self.sel[i] end
+  nodeCamCore.saveState(self.shapeVid, {
+    sig = self.shapeSig, nodes = nodes,
+    ax = self.anchor.x, ay = self.anchor.y, az = self.anchor.z,
+    yaw = self.yaw, pitch = self.pitch,
+  })
+end
+
+-- Hand it back, but only if the body is still the one those nodes were picked on.
+function C:restoreState(vid, sig)
+  local st = nodeCamCore and nodeCamCore.getState and nodeCamCore.getState(vid)
+  if not st or st.sig ~= sig then return false end
+
+  self.anchor.x, self.anchor.y, self.anchor.z = st.ax, st.ay, st.az
+  self.anchorValid = true
+  self.yaw, self.pitch = st.yaw or 0, st.pitch or 0
+
+  local n = 0
+  for _, v in ipairs(st.nodes or {}) do
+    if v <= self.nNodes then n = n + 1; self.sel[n] = v end
+  end
+  self.nSel = n
+  if n >= 4 then self:refreshSet() else self.softPos = nil end
+  return true
+end
+
 function C:cycleSlot(vid)
   local total = max(1, min(6, floor(cfg().slotCount or 3)))
   local cur = nodeCamCore.slotIndex(vid)
@@ -955,7 +987,7 @@ function C:update(data)
   if consume('invalidate') then self.shapeSig = nil end
 
   if self.shapeVid ~= data.vid or self.shapeSig ~= sig then
-    local hadNodes = self.nSel
+    self:stashState()
     self.shapeVid, self.shapeSig = data.vid, sig
     self.shapeReady = false
     self.anchorValid = false
@@ -963,9 +995,7 @@ function C:update(data)
     self.nSel = 0
     self.softPos = nil
     self.hoverNode, self.nPick = nil, 0
-    if hadNodes > 0 then
-      msg('nodeCam: different vehicle, nodes cleared')
-    end
+    self.pendingRestore = true
   end
 
   if not self.shapeReady then
@@ -973,7 +1003,16 @@ function C:update(data)
     self.shapeRetry = (self.shapeRetry or 0) - dt
     if self.shapeRetry <= 0 then
       self.shapeRetry = 0.25
-      if self:buildShapeGE(veh) then self:revalidateSet() end
+      if self:buildShapeGE(veh) then
+        self:revalidateSet()
+        if self.pendingRestore then
+          self.pendingRestore = false
+          if self:restoreState(data.vid, sig) then
+            msg(string.format('nodeCam: %s',
+              self.nSel >= 4 and (self.nSel .. ' nodes restored') or 'steady'))
+          end
+        end
+      end
     end
     if not self.shapeReady then
       return self:fallback(data, self.shapeFail or 'could not map the vehicle nodes')
