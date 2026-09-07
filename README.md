@@ -1,6 +1,6 @@
 # AI Disclosure
 
-This mod was made with AI, I am not a coder, I've only done very simple things in the past. Using AI, specifically claude in this case has allowed me to act on ideas I have but can't realistically make on my own. I don't agree AI mods should be private, closed-source or paid, or paid, so along with a forum release(soon) I am releasing this on github so others can contribute or build off of this, it's open source with a GNU General Public License v3.0
+This mod was made with AI, I am not a coder, I've only done very simple things in the past. Using AI, specifically claude in this case has allowed me to act on ideas I have but can't realistically make on my own. I don't think AI mods should be private, closed-source or paid, so along with a forum release(soon) I am releasing this on github so others can contribute or build off of this, it's open source with a GNU General Public License v3.0
 
 # nodeCam
 
