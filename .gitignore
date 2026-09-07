@@ -1,0 +1,13 @@
+# built release archives
+*.zip
+
+# editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# os junk
+.DS_Store
+Thumbs.db
+desktop.ini
